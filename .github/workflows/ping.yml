@@ -1,0 +1,27 @@
+# Ruft den Nachrichtenausgang des Portals fortlaufend auf, damit Flatfox-Anfragen sofort
+# beantwortet und fällige Nachrichten sofort verschickt werden.
+# Hintergrund: Vercel Hobby erlaubt nur tägliche Crons, und GitHub drosselt */5-Schedules
+# in privaten Repos auf Stunden. Darum: öffentliches Repo + Loop pro Lauf + Verkettung
+# über die concurrency-Gruppe (ein wartender Lauf startet direkt nach dem laufenden).
+name: Outbox-Ping
+on:
+  schedule:
+    - cron: "*/15 * * * *"
+  workflow_dispatch:
+concurrency:
+  group: ping
+  cancel-in-progress: false
+permissions: {}
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    timeout-minutes: 22
+    steps:
+      - name: Ausgang im Minutentakt aufrufen (ca. 18 Minuten)
+        run: |
+          for i in $(seq 1 12); do
+            curl -sS --max-time 120 -o /dev/null -w "Aufruf $i: HTTP %{http_code} (%{time_total}s)\n" \
+              -H "Authorization: Bearer ${{ secrets.CRON_SECRET }}" \
+              https://portal.veluna-properties.ch/api/outbox/run || echo "Aufruf $i fehlgeschlagen"
+            if [ "$i" -lt 12 ]; then sleep 30; fi
+          done
