@@ -1,8 +1,11 @@
 # Ruft den Nachrichtenausgang des Portals fortlaufend auf, damit Flatfox-Anfragen sofort
 # beantwortet und fällige Nachrichten sofort verschickt werden.
-# Hintergrund: Vercel Hobby erlaubt nur tägliche Crons, und GitHub drosselt */5-Schedules
-# in privaten Repos auf Stunden. Darum: öffentliches Repo + Loop pro Lauf + Verkettung
-# über die concurrency-Gruppe (ein wartender Lauf startet direkt nach dem laufenden).
+# Hintergrund: Vercel Hobby erlaubt nur tägliche Crons, und GitHub drosselt schedule-Crons
+# auch in öffentlichen Repos auf Stunden (beobachtet: 6h-Lücken trotz */15).
+# Lösung: Selbst-Verkettung. Jeder Lauf stösst beim Start sofort seinen Nachfolger an
+# (workflow_dispatch mit GITHUB_TOKEN ist eine dokumentierte Ausnahme der Rekursions-Sperre).
+# Die concurrency-Gruppe hält genau einen laufenden + einen wartenden Lauf.
+# Der Zeitplan bleibt nur als Neustart-Fallback, falls die Kette je abreisst.
 name: Outbox-Ping
 on:
   schedule:
@@ -11,17 +14,26 @@ on:
 concurrency:
   group: ping
   cancel-in-progress: false
-permissions: {}
+permissions:
+  actions: write
 jobs:
   ping:
     runs-on: ubuntu-latest
     timeout-minutes: 22
     steps:
-      - name: Ausgang im Minutentakt aufrufen (ca. 18 Minuten)
+      - name: Nachfolger sofort anstossen (wartet in der concurrency-Gruppe)
         run: |
-          for i in $(seq 1 12); do
+          curl -sS -o /dev/null -w "Dispatch Nachfolger: HTTP %{http_code}\n" \
+            -X POST \
+            -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
+            -H "Accept: application/vnd.github+json" \
+            https://api.github.com/repos/${{ github.repository }}/actions/workflows/ping.yml/dispatches \
+            -d '{"ref":"main"}' || echo "Dispatch fehlgeschlagen – Zeitplan-Fallback greift"
+      - name: Ausgang im Minutentakt aufrufen (ca. 20 Minuten)
+        run: |
+          for i in $(seq 1 27); do
             curl -sS --max-time 120 -o /dev/null -w "Aufruf $i: HTTP %{http_code} (%{time_total}s)\n" \
               -H "Authorization: Bearer ${{ secrets.CRON_SECRET }}" \
               https://portal.veluna-properties.ch/api/outbox/run || echo "Aufruf $i fehlgeschlagen"
-            if [ "$i" -lt 12 ]; then sleep 30; fi
+            if [ "$i" -lt 27 ]; then sleep 45; fi
           done
