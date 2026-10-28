@@ -29,11 +29,17 @@ jobs:
             -H "Accept: application/vnd.github+json" \
             https://api.github.com/repos/${{ github.repository }}/actions/workflows/ping.yml/dispatches \
             -d '{"ref":"main"}' || echo "Dispatch fehlgeschlagen – Zeitplan-Fallback greift"
-      - name: Ausgang im Minutentakt aufrufen (ca. 20 Minuten)
+      - name: Ausgang im Minutentakt aufrufen (zeitbasiert, 19 Minuten)
         run: |
-          for i in $(seq 1 27); do
+          # Zeitbasiert statt fixer Iterationszahl, damit der Lauf sicher vor dem
+          # 22-Minuten-Timeout sauber endet (Curl-Aufrufe dauern je einige Sekunden).
+          ende=$(( $(date +%s) + 1140 ))
+          i=0
+          while [ "$(date +%s)" -lt "$ende" ]; do
+            i=$((i+1))
             curl -sS --max-time 120 -o /dev/null -w "Aufruf $i: HTTP %{http_code} (%{time_total}s)\n" \
               -H "Authorization: Bearer ${{ secrets.CRON_SECRET }}" \
               https://portal.veluna-properties.ch/api/outbox/run || echo "Aufruf $i fehlgeschlagen"
-            if [ "$i" -lt 27 ]; then sleep 45; fi
+            sleep 45
           done
+          echo "Fertig nach $i Aufrufen – Nachfolger wartet bereits."
